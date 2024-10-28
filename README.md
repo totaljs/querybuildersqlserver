@@ -3,7 +3,7 @@
 A simple QueryBuilder integrator for mssql database.
 
 - [Documentation](https://docs.totaljs.com/total4/pzbr001pr41d/)
-- `$ npm install querybuilderpg`
+- `$ npm install querybuildersqlserver`
 
 ## Initialization
 
