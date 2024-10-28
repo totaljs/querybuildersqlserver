@@ -7,7 +7,7 @@ A simple QueryBuilder integrator for mssql database.
 
 ## Initialization
 
-- Example: `mssql://user:password@localhost:5432/database`
+- Example: `microsoftsqlserver://user:password@localhost:5432/database`
 
 ```js
 // require('querybuilderpg').init(name, connectionstring, pooling, [errorhandling]);
@@ -20,7 +20,7 @@ require('querybuilderpg').init('default', CONF.database);
 // require('querybuilderpg').init('default', CONF.database, 10);
 ```
 
-__Usage__:
+**Usage**:
 
 ```js
 DATA.find('tbl_user').where('id', 1234).callback(console.log);
@@ -28,9 +28,4 @@ DATA.find('tbl_user').where('id', 1234).callback(console.log);
 
 ## Connection string attributes
 
-- Connection string example: `mssql://user:password@localhost:5432/database?schema=parking&pooling=2`
-
----
-
-- `schema=String` sets a default DB schema
-- `pooling=Number` sets a default pooling (it overwrites pooling)
+- Connection string example: `microsoftsqlserver://user:password@localhost:5432/database`
