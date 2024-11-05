@@ -316,7 +316,6 @@ function replacelanguage(fields, language, noas) {
 };
 
 function makesql(opt, exec) {
-
 	var query = '';
 	var where = [];
 	var model = {};
@@ -624,7 +623,7 @@ exports.init = function(name, connstring, pooling, errorhandling) {
 				if (err)
 					callback(err);
 				else {
-					exec(pool, filter, callback, () => pool.close(), onerror);
+					exec(pool, filter, callback, () => pool.connected ? null : pool.close(), onerror);
 				}
 			})
 		} else {
