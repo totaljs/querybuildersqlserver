@@ -31,6 +31,7 @@ function exec(client, filter, callback, done, errorhandling) {
 				errorhandling && errorhandling(err, cmd);
 				callback(err);
 			} else {
+				let listcmd = cmd;
 				cmd = makesql(filter, 'count');
 
 				if (filter.debug)
@@ -39,7 +40,7 @@ function exec(client, filter, callback, done, errorhandling) {
 				client.query(cmd.query, function(err, counter) {
 					done();
 					err && errorhandling && errorhandling(err, cmd);
-					callback(err, err ? null : { items: response.recordset, count: +counter.recordset[0].count });
+					callback(err, err ? null : { items: jsonparse(response.recordset, listcmd.jsonarrays), count: +counter.recordset[0].count });
 				});
 			}
 		});
@@ -134,7 +135,7 @@ function exec(client, filter, callback, done, errorhandling) {
 				callback(null, output);
 				break;
 			default:
-				output = response.recordset;
+				output = jsonparse(response.recordset, cmd.jsonarrays);
 				callback(err, output);
 				break;
 		}
@@ -156,7 +157,9 @@ function mssql_where(where, opt, filter, operator) {
 
 			if (!name) {
 				name = item.name;
-				if (name[name.length - 1] === '§')
+				if (name.substring(0, 5) === 'json:')
+					name = jsonname(name);
+				else if (name[name.length - 1] === '§')
 					name = replacelanguage(item.name, opt.language, true);
 				else
 					name = REG_COL_TEST.test(item.name) ? item.name : ('"' + item.name + '"');
@@ -202,6 +205,18 @@ function mssql_where(where, opt, filter, operator) {
 				where.length && where.push(operator);
 				where.push('LEN(CAST(' + name +' AS VARCHAR))>0');
 				break;
+			case 'array':
+				if (item.name.substring(0, 5) === 'json:' && item.name.substring(item.name.length - 9) === ':[string]') {
+					where.length && where.push(operator);
+					tmp = [];
+					let arr = item.name.split(':');
+					let values = typeof(item.value) === 'string' ? item.value.split(',') : item.value;
+					for (let m of values)
+						tmp.push(MSSQL_ESCAPE(typeof(m) === 'string' ? m.trim() : m));
+					let q = 'JSON_QUERY("' + arr[1] + '",\'$."' + arr[2] + '"\')';
+					where.push('(LEFT(LTRIM(' + q + '),1)=\'[\' AND EXISTS(SELECT 1 FROM OPENJSON(' + q + ') WHERE value IN (' + (tmp.length ? tmp.join(',') : 'NULL') + ')))');
+				}
+				break;
 			case 'search':
 				where.length && where.push(operator);
 				tmp = item.value ? item.value.replace(/%/g, '') : '';
@@ -211,7 +226,7 @@ function mssql_where(where, opt, filter, operator) {
 				else if (item.operator === 'end')
 					where.push(name + ' LIKE ' + MSSQL_ESCAPE(tmp + '%'));
 				else
-					where.push('CAST(' + name + ' AS VARCHAR) LIKE ' + MSSQL_ESCAPE('%' + tmp + '%'));
+					where.push((item.name.substring(0, 5) === 'json:' ? name : ('CAST(' + name + ' AS VARCHAR)')) + ' LIKE ' + MSSQL_ESCAPE('%' + tmp + '%'));
 				break;
 			case 'month':
 			case 'year':
@@ -308,6 +323,63 @@ function mssql_insertupdate(filter, insert) {
 	return { fields, query, params };
 };
 
+// Neutral name from QueryBuilder.autoqueryjson(): "json:column:property:type"
+// A missing property is NULL and a value in a wrong format never fails: Number: 0, Boolean: false, Date: NULL, Array: []
+// Requires SQL Server 2016+ (JSON_VALUE, OPENJSON) and 2012+ (TRY_CAST)
+function jsonname(name, select) {
+
+	let arr = name.split(':');
+	let col = '"' + arr[1] + '"';
+	let path = '\'$."' + arr[2] + '"\'';
+	let text = 'JSON_VALUE(' + col + ',' + path + ')';
+	let expr;
+
+	switch (arr[3]) {
+		case 'number':
+		case 'decimal':
+		case 'float':
+			expr = 'CASE WHEN ' + text + ' IS NULL THEN NULL ELSE ISNULL(TRY_CAST(' + text + ' AS FLOAT),0) END';
+			break;
+		case 'boolean':
+		case 'bool':
+			expr = 'CAST(CASE WHEN ' + text + ' IS NULL THEN NULL WHEN LOWER(LTRIM(RTRIM(' + text + '))) IN (\'true\',\'1\',\'on\',\'yes\') THEN 1 ELSE 0 END AS BIT)';
+			break;
+		case 'date':
+		case 'datetime':
+			expr = 'TRY_CAST(' + text + ' AS DATETIMEOFFSET)';
+			break;
+		case '[string]':
+			// returns a JSON text, it is parsed to the array in the exec()
+			let q = 'JSON_QUERY(' + col + ',' + path + ')';
+			expr = 'CASE WHEN ' + q + ' IS NOT NULL THEN (CASE WHEN LEFT(LTRIM(' + q + '),1)=\'[\' THEN ' + q + ' ELSE \'[]\' END) WHEN ' + text + ' IS NOT NULL THEN \'[]\' ELSE NULL END';
+			break;
+		default:
+			expr = text;
+			break;
+	}
+
+	if (select)
+		return expr + ' AS "' + arr[2] + '"';
+
+	return expr === text ? text : '(' + expr + ')';
+}
+
+// Parses JSON arrays (autoqueryjson) in the returned rows
+function jsonparse(rows, names) {
+	if (names && rows instanceof Array) {
+		for (let row of rows) {
+			for (let name of names) {
+				if (typeof(row[name]) === 'string') {
+					try {
+						row[name] = JSON.parse(row[name]);
+					} catch (e) {}
+				}
+			}
+		}
+	}
+	return rows;
+}
+
 function replacelanguage(fields, language, noas) {
 	return fields.replace(REG_LANGUAGE, function(val) {
 		val = val.substring(0, val.length - 1);
@@ -339,7 +411,9 @@ function makesql(opt, exec) {
 		if (!fields) {
 			for (let i = 0; i < opt.fields.length; i++) {
 				let m = opt.fields[i];
-				if (m[m.length - 1] === '§')
+				if (m.substring(0, 5) === 'json:')
+					fields += (fields ? ',' : '') + jsonname(m, true);
+				else if (m[m.length - 1] === '§')
 					fields += (fields ? ',' : '') + replacelanguage(m, opt.language);
 				else
 					fields += (fields ? ',' : '') + (REG_COL_TEST.test(m) ? m : ('"' + m + '"'));
@@ -439,7 +513,7 @@ function makesql(opt, exec) {
 					let index = m.lastIndexOf('_');
 					let name = m.substring(0, index);
 					
-					let value = (REG_COL_TEST.test(name) ? name : ('"' + name + '"')).replace(/§/, language);
+					let value = name.substring(0, 5) === 'json:' ? jsonname(name) : (REG_COL_TEST.test(name) ? name : ('"' + name + '"')).replace(/§/, language);
 					sort += (sort ? ',' : '') + value + ' ' + (m.substring(index + 1).toLowerCase() === 'desc' ? 'DESC' : 'ASC');
 				}
 				FieldsCache[key] = sort;
@@ -462,6 +536,12 @@ function makesql(opt, exec) {
 
 	model.query = query;
 	model.params = params;
+
+	if (opt.fields && (exec === 'find' || exec === 'read' || exec === 'list')) {
+		let arrays = opt.fields.filter(n => n.substring(0, 5) === 'json:' && n.substring(n.length - 9) === ':[string]').map(n => n.split(':')[2]);
+		if (arrays.length)
+			model.jsonarrays = arrays;
+	}
 
 	if (CANSTATS) {
 		if (isread)
