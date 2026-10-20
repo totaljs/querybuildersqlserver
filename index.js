@@ -226,7 +226,7 @@ function mssql_where(where, opt, filter, operator) {
 				else if (item.operator === 'end')
 					where.push(name + ' LIKE ' + MSSQL_ESCAPE(tmp + '%'));
 				else
-					where.push((item.name.substring(0, 5) === 'json:' ? name : ('CAST(' + name + ' AS VARCHAR)')) + ' LIKE ' + MSSQL_ESCAPE('%' + tmp + '%'));
+					where.push((item.name.substring(0, 5) === 'json:' ? name : ('CAST(' + name + ' AS NVARCHAR(MAX))')) + ' LIKE ' + MSSQL_ESCAPE('%' + tmp + '%'));
 				break;
 			case 'month':
 			case 'year':
